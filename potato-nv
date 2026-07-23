@@ -1,0 +1,115 @@
+#!/bin/bash
+
+# Script original-made by OpenA
+# @ https://github.com/OpenA-forks/PotatoNV-cross-gui
+#
+
+ATTENTION="""
+ THIS TOOL IS ABLSOLUTE SAFE FOR YOU DEVICE, BUT NOT FOR YOU DATA!
+ AFTER UNLOCKING THE OEM, A FACTORY RESET WILL FOLLOW WITH A COMPLETE LOSS OF USERDATA.
+ SO, BEFORE DOING THIS, BACK UP YOUR CONTACTS, PHOTOS, DATA APPS AND OTHERS.
+ ALSO, REMOVE SD-CARDS AND MAKE A DUMP OF YOUR ORIGINAL FIRMWARE AND RECOVERY.
+ IF SOMETHING GOES WRONG AND YOU GET BRICK, USE THIS TOOL BOOTFLASH FOR RESTORE IT.
+"""
+
+skip_flash=
+bootloader=
+user_key=
+fblock=
+
+for a in "$@"; do
+	case $a in
+	--help | -h)
+		echo ""
+		echo "  Command-line tool for helping Huawei device get OEM-Unlock via test-point."
+		echo ""
+		echo " usage: potato-nv [-F|-S] [--key=%s] [hisiXXX]"
+		echo ""
+		echo "  -S, --skip-bootflash  Skip flashing a patched bootloader"
+		echo "  -F, --fblock={0-1}    Write FB flag  to NVE (0: unlock 1: lock)"
+		echo "      --key=<16-chars>  Write OEM secret in to device NVE"
+		echo ""
+		echo "  -v, --version         print program's version"
+		echo "  -h, --help            show this help message"
+		echo ""
+		echo "$ATTENTION"
+		exit
+		;;
+	--version | -v)
+		echo "potato-nv 1.0"
+		exit
+		;;
+	--skip-bootflash | -S)
+		skip_flash=1
+		;;
+	--fblock=*)
+		fblock=$(expr substr "$a" 10 3)
+		;;
+	-F) fblock=0
+		;;
+	--key=*)
+		user_key=$(expr substr "$a" 7 32)
+		;;
+	--* | -*)
+		echo ""
+		echo "unknown option [$a]"
+		echo ""
+		exit
+		;;
+	*) bootloader="$a"
+		;;
+	esac
+done
+
+bootloader_select() {
+	loaders=()
+	count=0
+	echo ""
+	echo "(  If you don't know which one is yours, check here:"
+	printf "\033[0;34m   https://github.com/kitsuned/PotatoNV#tested-devices  \033[0m)\n"
+	echo ""
+	echo "List of avilable bootloaders:"
+	echo ""
+	for m in bootloaders/*/manifest.xml; do
+		d="${m%/*}"
+		loaders+=("$m")
+		printf " ${count}: \033[1m${d#*/}\033[0m\n"
+		((count++))
+	done
+	read -p "Set the bootloader number: " i
+
+	if [[ $i -gt $count || $i -eq $count || $i -lt 0 ]]; then
+		printf "\033[0;31mNumber is out of range\033[0m\n"
+		exit
+	else
+		bootloader="${loaders[i]}"
+	fi
+}
+
+if [ -z $skip_flash ]; then
+	if [ -z "$bootloader" ]; then
+		bootloader_select
+	else
+		bootloader+='/manifest.xml'
+		if [ ! -f "$bootloader" ]; then
+			echo "'$bootloader' is not found!"
+			exit
+		fi
+	fi
+	if [ `id -u` -ne 0 ]; then
+		echo "Access to '/dev/ttyUSB0' requires root:"
+		(
+			pkexec python3 "$PWD/usrlock/imageflasher.py" "$PWD/$bootloader"
+		)
+	else
+		python3 usrlock/imageflasher.py "$PWD/$bootloader"
+	fi
+	read -p "Connecting to fastboot? (y/n) " y
+	if [[ "$y" != 'Y' && "$y" != 'y' ]]; then
+		exit
+	fi
+fi
+
+if [ ! -z "$user_key" ]; then
+	python3 usrlock/fastboot.py "$user_key" "$fblock"
+fi
