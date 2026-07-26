@@ -12,6 +12,8 @@ ATTENTION="""
  IF SOMETHING GOES WRONG AND YOU GET BRICK, USE THIS TOOL BOOTFLASH FOR RESTORE IT.
 """
 
+manifest="$PWD/bootloaders/manifest.json"
+test_hash=
 skip_flash=
 bootloader=
 user_key=
@@ -21,32 +23,32 @@ for a in "$@"; do
 	case $a in
 	--help | -h)
 		echo ""
-		echo "  Command-line tool for helping Huawei device get OEM-Unlock via test-point."
+		echo " Command-line tool for helping Huawei device get OEM-Unlock via test-point."
 		echo ""
-		echo " usage: potato-nv [-F|-S] [--key=%s] [hisiXXX]"
+		echo " usage: potato-nv [-FU|-Sb] [--key=%s] [PRA|hisiXXX]"
 		echo ""
-		echo "  -S, --skip-bootflash  Skip flashing a patched bootloader"
-		echo "  -F, --fblock={0-1}    Write FB flag  to NVE (0: unlock 1: lock)"
-		echo "      --key=<16-chars>  Write OEM secret in to device NVE"
+		echo "  -Sb,     --skip-bootflash    Skip flashing a patched bootloader"
+		echo "  -Th,     --test-hash         Test images hash"
+		echo "  -FU,-FL, --fblock={0-1}      Write FB flag to NVE (0: Unlock 1: Lock)"
+		echo "           --key=<16-chars>    Write OEM secret in to device NVE"
 		echo ""
-		echo "  -v, --version         print program's version"
-		echo "  -h, --help            show this help message"
+		echo "  -v,      --version           print program's version"
+		echo "  -h,      --help              show this help message"
 		echo ""
 		echo "$ATTENTION"
 		exit
 		;;
 	--version | -v)
-		echo "potato-nv 1.0"
+		echo "potato-nv 1.1"
 		exit
 		;;
-	--skip-bootflash | -S)
-		skip_flash=1
-		;;
+	--skip-bootflash | -Sb) skip_flash=1 ;;
+	--test-hash      | -Th) test_hash=1  ;;
 	--fblock=*)
 		fblock=$(expr substr "$a" 10 3)
 		;;
-	-F) fblock=0
-		;;
+	-FU) fblock=0 ;;
+	-FL) fblock=1 ;;
 	--key=*)
 		user_key=$(expr substr "$a" 7 32)
 		;;
@@ -62,47 +64,54 @@ for a in "$@"; do
 done
 
 bootloader_select() {
-	loaders=()
-	count=0
+	local loaders=()
+	local count=0
 	echo ""
 	echo "(  If you don't know which one is yours, check here:"
-	printf "\033[0;34m   https://github.com/kitsuned/PotatoNV#tested-devices  \033[0m)\n"
+	printf "\033[0;33m   https://github.com/kitsuned/PotatoNV#tested-devices  \033[0m)\n"
 	echo ""
 	echo "List of avilable bootloaders:"
 	echo ""
-	for m in bootloaders/*/manifest.xml; do
-		d="${m%/*}"
-		loaders+=("$m")
-		printf " ${count}: \033[1m${d#*/}\033[0m\n"
+
+	while IFS= read -r hisi; do
+		loaders+=("$hisi")
 		((count++))
-	done
+		printf "  \033[2m[\033[0m$count\033[2m]\033[0m \033[1m$hisi\033[0m\n" #\033[2m~\033[0m\033[1;32m %s \033[0m
+	done <<< "$1"
 	read -p "Set the bootloader number: " i
 
-	if [[ $i -gt $count || $i -eq $count || $i -lt 0 ]]; then
+	if [[ $i -gt $count || $i -lt 1 ]]; then
 		printf "\033[0;31mNumber is out of range\033[0m\n"
 		exit
 	else
-		bootloader="${loaders[i]}"
+		bootloader="${loaders[i-1]}"
 	fi
 }
 
 if [ -z $skip_flash ]; then
 	if [ -z "$bootloader" ]; then
-		bootloader_select
+		cmd='puts:path'
 	else
-		bootloader+='/manifest.xml'
-		if [ ! -f "$bootloader" ]; then
-			echo "'$bootloader' is not found!"
-			exit
-		fi
+		cmd="find:$bootloader"
 	fi
-	if [ `id -u` -ne 0 ]; then
+	output=`python3 usrlock/bootloaders.py "$manifest" $cmd`
+
+	if  [ -z "$bootloader" ]; then
+		bootloader_select "$output"
+	elif [ -z "$output" ]; then
+		echo "'$bootloader' is not found!"
+		exit
+	fi
+	if [ $test_hash -eq 1 ]; then
+		python3 usrlock/imageflasher.py "$manifest" "test:$bootloader"
+		exit
+	elif [ `id -u` -ne 0 ]; then
 		echo "Access to '/dev/ttyUSB0' requires root:"
 		(
-			pkexec python3 "$PWD/usrlock/imageflasher.py" "$PWD/$bootloader"
+			pkexec python3 "$PWD/usrlock/imageflasher.py" "$manifest" "$bootloader"
 		)
 	else
-		python3 usrlock/imageflasher.py "$PWD/$bootloader"
+		python3 usrlock/imageflasher.py "$manifest" "$bootloader"
 	fi
 	read -p "Connecting to fastboot? (y/n) " y
 	if [[ "$y" != 'Y' && "$y" != 'y' ]]; then

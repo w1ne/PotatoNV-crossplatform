@@ -1,0 +1,151 @@
+[
+	{
+		"name": "Kirin 620",
+		"type": 2,
+		"path": "hisi620",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "09bca2328ef17f556b94cfbe81ff782655694447",
+				"addr": 4185917440
+			},
+			{
+				"role": "fastboot",
+				"hash": "fb05ca37c076a07a0e08062f7c193d9e1064e345",
+				"addr": 109051904
+			}
+		],
+		"dev_models": ["ALE"]
+	},
+	{
+		"name": "Kirin 620 (C)",
+		"type": 2,
+		"path": "hisi620c",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "b50f62949dc5edf35478cfb3d7b2b20f638db017",
+				"addr": 4185917440
+			},
+			{
+				"role": "fastboot",
+				"hash": "450110e1807eb5e829e863ce60fb0020c21e06a6",
+				"addr": 109051904
+			}
+		],
+		"dev_models": ["CAM"]
+	},
+	{
+		"name": "Kirin 925",
+		"type": 2,
+		"path": "hisi925",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "79a8b5985b8c72fd482982ee50a5f0f4d7f92f3c",
+				"addr": 131072
+			},
+			{
+				"role": "fastboot",
+				"hash": "919f8c28dd65c39c6c48dc34f10ee4d088e064c7",
+				"addr": 268435456
+			}
+		],
+		"dev_models": ["PE"]
+	},
+	{
+		"name": "Kirin 935",
+		"type": 2,
+		"path": "hisi935",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "a1b9ad228cb0d5b107900ef8dbc140fe628593fc",
+				"addr": 131072
+			},
+			{
+				"role": "fastboot",
+				"hash": "3440b5168278b92420ff6e179f2f81b1973c92ae",
+				"addr": 268435456
+			}
+		],
+		"dev_models": ["PLK", "GRA"]
+	},
+	{
+		"name": "Kirin 950",
+		"type": 2,
+		"path": "hisi950",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "2295d47c9ebe580956dbdd01eef249555ed4c872",
+				"addr": 131072
+			},
+			{
+				"role": "fastboot",
+				"hash": "0f1d7f8ac17406c17569d4a1aed74b0103ec2860",
+				"addr": 268435456
+			}
+		],
+		"dev_models": ["DUK", "FRD", "EVA"]
+	},
+	{
+		"name": "Kirin 65x (A)",
+		"type": 2,
+		"path": "hisi65x_a",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "8a35f16db94dafde47aa718c673958f108805480",
+				"addr": 131072
+			},
+			{
+				"role": "fastboot",
+				"hash": "c77c7524e79aabfa5b979053dd2186dc2bae53e1",
+				"addr": 268435456
+			}
+		],
+		"dev_models": ["NEM", "BLN", "BND", "LLD", "AGS2", "PIC", "WAS", "ANE", "PRA", "VNS", "FLA"]
+	},
+	{
+		"name": "Kirin 65x (B)",
+		"type": 2,
+		"path": "hisi65x_b",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "9f3f9cbe50feb0c3c15da56aa7353d19601e7a47",
+				"addr": 131072
+			},
+			{
+				"role": "fastboot",
+				"hash": "1fbac57d4a5fd9d1a655bfe65cfb349dcb7780d7",
+				"addr": 268435456
+			}
+		],
+		"dev_models": ["BAH2", "RNE", "FIG"]
+	},
+	{
+		"name": "Kirin 960",
+		"type": 2,
+		"path": "hisi960",
+		"imgs": [
+			{
+				"role": "xloader",
+				"hash": "511771400658fb2ffa2e0abcb22c3c274c9a3e7b",
+				"addr": 131072
+			},
+			{
+				"role": "uce",
+				"hash": "4d594cdc08316879ae7987cca5878ff97f9bd789",
+				"addr": 1787854848
+			},
+			{
+				"role": "fastboot",
+				"hash": "5254085bd85943f795f679900563b51153515e66",
+				"addr": 448790528
+			}
+		],
+		"dev_models": ["STF", "LON", "MHA", "CMR", "HWI", "VTR"]
+	}
+]

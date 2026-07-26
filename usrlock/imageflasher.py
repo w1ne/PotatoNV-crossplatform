@@ -1,17 +1,14 @@
-# Reworked from https://github.com/96boards-hikey/tools-images-hikey970/blob/hikey970_v1.0/hisi-idt.py
-
+# Reworked from:
+# * https://github.com/96boards-hikey/tools-images-hikey970/blob/hikey970_v1.0/hisi-idt.py
+# 
 # Copyright 2019 Penn Mackintosh
 # Copyright 2020 Andrey Smirnoff
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+# Modyfied by OpenA @ 2026
 #
-# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
 import serial, os, sys, time, binascii
 import serial.tools.list_ports
-import xml.etree.ElementTree as ET
+from  bootloaders import Bootloaders
 
 S_SEP = f"\n:{'*' * 32}\n"
 E_SEP = f"\n;{'-' * 32}\n"
@@ -109,20 +106,37 @@ class ImageFlasher:
         time.sleep(0.5)
 
     @staticmethod
-    def bootflash(manifest_path: str):
+    def bootflash(manifest_path: str, hisi: str):
         flasher = ImageFlasher()
         flasher.connect_serial()
 
-        tree = ET.parse(manifest_path).getroot()
-        path = os.path.dirname(manifest_path)
-        for img in tree.findall('image'):
-            print("%s+ 💾 Flashing %s"% (S_SEP, img.attrib['role']), end=S_SEP)
-            addr = int(img.attrib['address'], base=16)
-            file = os.path.join(path, img.attrib['path'])
+        tree = Bootloaders.load(manifest_path)
+        el   = tree.find(hisi)
+        idx  = 0
+        for f_img in tree.extract_images(el):
+            role = el['imgs'][idx]['role']
+            addr = el['imgs'][idx]['addr']
+            print("%s+ 💾 Flashing %s"% (S_SEP, role), end=S_SEP)
 
-            with open(file, "rb") as f:
+            with open(f_img, "rb") as f:
                 flasher.send_data(f, os.fstat(f.fileno()).st_size, addr)
+            idx += 1
         print("🍀 Bootloader uploaded.", end='\n\n')
+
+    @staticmethod
+    def testimage(manifest_path: str, hisi: str):
+        tree = Bootloaders.load(manifest_path)
+        el   = tree.find(hisi)
+        idx  = nok = 0
+        print("%s; 🛅 Testing images \033[1m%s\033[0m"% (S_SEP, el['path']), end=S_SEP)
+        for sha1 in tree.hash_images(el):
+            role = el['imgs'][idx]['role']
+            hash = el['imgs'][idx]['hash']
+            cmp  = hash == sha1
+            print('; ┌ %s.img ┐\n; └── \033[1;37;42m%s\033[0m\n;   ╚ \033[1;37;4%dm%s\033[0m'% (role, hash, cmp+1, sha1))
+            nok += cmp
+            idx += 1
+        print("%s; 🛂 Passes: %d"% (E_SEP[1:], nok), end='\n\n')
 
     def connect_serial(self, device=None):
         print("🔍 Waiting for device in IDT mode")
@@ -152,4 +166,9 @@ class ImageFlasher:
             pass
 
 if __name__ == '__main__':
-    ImageFlasher.bootflash( manifest_path=sys.argv[1] )
+    path = sys.argv[1]
+    hisi = sys.argv[2]
+    if hisi.startswith('test:'):
+        ImageFlasher.testimage( path, hisi[5:] )
+    else:
+   	    ImageFlasher.bootflash( path, hisi )
