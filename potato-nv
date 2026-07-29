@@ -13,8 +13,9 @@ ATTENTION="""
 """
 
 manifest="$PWD/bootloaders/manifest.json"
-test_hash=
-skip_flash=
+fastboot=1
+test_hash=0
+boot_match=
 bootloader=
 user_key=
 fblock=
@@ -25,10 +26,10 @@ for a in "$@"; do
 		echo ""
 		echo " Command-line tool for helping Huawei device get OEM-Unlock via test-point."
 		echo ""
-		echo " usage: potato-nv [-FU|-Sb] [--key=%s] [PRA|hisiXXX]"
+		echo " Usage: potato-nv [-FU|-Th] [--key=%s] [--bootloader=PRA|hisiXXX]"
 		echo ""
-		echo "  -Sb,     --skip-bootflash    Skip flashing a patched bootloader"
-		echo "  -Th,     --test-hash         Test images hash"
+		echo "  -Bs,     --bootloader[=%s]   Select device specific bootloader for test-point mode."
+		echo "  -Ht,     --hash-test         Test bootloaders .img hash sums"
 		echo "  -FU,-FL, --fblock={0-1}      Write FB flag to NVE (0: Unlock 1: Lock)"
 		echo "           --key=<16-chars>    Write OEM secret in to device NVE"
 		echo ""
@@ -42,8 +43,12 @@ for a in "$@"; do
 		echo "potato-nv 1.1"
 		exit
 		;;
-	--skip-bootflash | -Sb) skip_flash=1 ;;
-	--test-hash      | -Th) test_hash=1  ;;
+	--hash-test  | -Ht) test_hash=1 ;& # !! hook the next option
+	--bootloader | -Bs) boot_match='puts:path' ;;
+	--bootloader=*)
+		bootloader=$(expr substr "$a" 14 16)
+		boot_match="find:$bootloader"
+		;;
 	--fblock=*)
 		fblock=$(expr substr "$a" 10 3)
 		;;
@@ -58,7 +63,8 @@ for a in "$@"; do
 		echo ""
 		exit
 		;;
-	*) bootloader="$a"
+	*)
+	# ...
 		;;
 	esac
 done
@@ -88,13 +94,8 @@ bootloader_select() {
 	fi
 }
 
-if [ -z $skip_flash ]; then
-	if [ -z "$bootloader" ]; then
-		cmd='puts:path'
-	else
-		cmd="find:$bootloader"
-	fi
-	output=`python3 usrlock/bootloaders.py "$manifest" $cmd`
+if [ ! -z "$boot_match" ]; then
+	output=`python3 usrlock/bootloaders.py "$manifest" "$boot_match"`
 
 	if  [ -z "$bootloader" ]; then
 		bootloader_select "$output"
@@ -119,6 +120,6 @@ if [ -z $skip_flash ]; then
 	fi
 fi
 
-if [ ! -z "$user_key" ]; then
+if [ $fastboot -eq 1 ]; then
 	python3 usrlock/fastboot.py "$user_key" "$fblock"
 fi

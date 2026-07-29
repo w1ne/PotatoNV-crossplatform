@@ -1,4 +1,10 @@
-
+# This code originaly based on:
+# * https://github.com/WorkHardes/fastbootpy
+# * https://github.com/w1ne/PotatoNV-crossplatform/blob/master/usrlock/main.py
+# * https://github.com/kitsuned/PotatoNV-crossplatform/blob/master/usrlock/fastboot.py
+#
+# Reworked by OpenA @ 2026
+#
 import sys, usb, hashlib
 
 HUAWEI_VENDOR_ID = 0x12D1
@@ -94,9 +100,23 @@ class Fastboot:
                 break
         return resp
 
+    def command(self):
+        while True:
+            c = input("⌨️  ")
+            if c == 'q' or c == 'exit' or c == 'quit':
+                break
+            elif c.startswith('reboot'):
+                self.reboot(mode=c[7:])
+                break
+            else:
+                d = self.send(c.encode())
+                r = self.recv().decode()
+                o = '🚫' if not d or r.startswith('FAIL') else '📄'
+                print(f"{o} {r[:4]} {r[4:]}", end='\n\n')
+
     def reboot(self, mode = ''):
         cmd = b'reboot'
-        if mode: cmd += (b'-' if mode == 'bootloader' else b':') + mode.encode()
+        if mode: cmd += b'-' + mode.encode()
         else   : mode = 'device'
         print(f"♻️  Reboot {mode}... ")
         done = self.send(cmd)
@@ -140,12 +160,12 @@ class Fastboot:
         return device
 
     @staticmethod
-    def usrlock(key: str, fblock: str = ''):
+    def usrlock(key: str = '', fblock: str = ''):
 
         sha = hashlib.sha256()
         fb  = Fastboot()
 
-        if len(key) != 16:
+        if key and len(key) != 16:
             print(f"🚫 USRKEY must be a 16-char string ({len(key)} == '{key}')")
             return
 
@@ -154,19 +174,25 @@ class Fastboot:
             return
 
         if fb.connect():
-            sha.update(key.encode())
+            quit = not not fblock or not not key
+            wipe = not not fblock
 
             if fblock:
                 fb.write_nvme('FBLOCK', fblock.encode())
-            fb.write_nvme('USRKEY', sha.digest())
-            fb.write_nvme('WVLOCK', key.encode())
+            if key:
+                sha.update(key.encode())
+                fb.write_nvme('USRKEY', sha.digest())
+                fb.write_nvme('WVLOCK', key.encode())
+                if 'y' == input("🚧 Attempt to OEM unlock? (y/n) "):
+                    fb.oem_unlock(key)
+                    wipe = True
 
-            if 'y' == input("🚧 Attempt to OEM unlock? (y/n) "):
-                fb.oem_unlock(key)
-            if fblock and 'y' == input("🚧 Do FRP/Data wipe before reboot...? (y/n) "):
+            if wipe and 'y' == input("🚧 Do FRP/Data wipe before reboot...? (y/n) "):
                 fb.erase('frp', 'userdata')
-            if 'y' == input("🚧 Want to reboot? (y/n) "):
+            if quit and 'y' == input("🚧 Want to reboot? (y/n) "):
                 fb.reboot()
+            else:
+                fb.command()
 
 if __name__ == '__main__':
     Fastboot.usrlock( key=sys.argv[1], fblock=sys.argv[2] )
