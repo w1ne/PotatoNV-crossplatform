@@ -36,8 +36,8 @@ class ImageFlasher:
         self.tailframe = bytes([0xED])
         self.ack = bytes([0xAA])
 
-    def send_frame(self, data):
-        crc = calc_crc(data)
+    def send_frame(self, data: bytes) -> bool:
+        crc = binascii.crc_hqx(data, 0)
         data += crc.to_bytes(2, byteorder="big", signed=False)
         try:
             self.serial.reset_output_buffer()
@@ -45,15 +45,16 @@ class ImageFlasher:
             self.serial.write(data)
             ack = self.serial.read(1)
             if ack and ack != self.ack:
-                print(f"⛔ Invalid ACK from device! Read: {hex(ack)}, excepted: {hex(self.ack[0])}", end='\n\n')
+                print("⛔ Invalid ACK from device! Read: 0x%x, excepted: 0x%x"% (ack, self.ack[0]), end='\n\n')
                 return False
         except Exception as e:
             print(f"⛔ {e}", end='\n\n')
             return False
         return True
 
-    def send_head_frame(self, length, address):
-        self.serial.timeout = 0.09
+    def send_head_frame(self, length: int, address: int) -> bool:
+        if self.serial:
+            self.serial.timeout = 0.09
         print("; 🗳️  Sending header frame...", end=E_SEP)
         data = self.headframe
         data += length.to_bytes(4, byteorder="big", signed=False)
@@ -61,14 +62,15 @@ class ImageFlasher:
         return self.send_frame(data)
 
     def send_data_frame(self, n: int, data: bytes, n_frames: int) -> bool:
-        self.serial.timeout = 0.45
+        if self.serial:
+            self.serial.timeout = 0.45
         print(f"; ... [{n}/{n_frames}]{' '*12}", end='\r')
         head = bytearray(self.dataframe)
         head.append(n & 0xFF)
         head.append((~ n) & 0xFF)
         return self.send_frame(bytes(head) + data)
 
-    def send_tail_frame(self, n):
+    def send_tail_frame(self, n: int) -> bool:
         if self.serial:
             self.serial.timeout = 0.01
         print(E_SEP +"; 🍤 Sending tail frame...", end=E_SEP)
@@ -77,7 +79,7 @@ class ImageFlasher:
         data.append((~ n) & 0xFF)
         return self.send_frame(bytes(data))
 
-    def send_data(self, data, length, address):
+    def send_data(self, data: bytes, length: int, address: int):
         if isinstance(data, bytes):
             length = len(data)
         n_frames = length // MAX_DATA_LEN + (1 if length % MAX_DATA_LEN > 0 else 0)
@@ -108,20 +110,21 @@ class ImageFlasher:
     @staticmethod
     def bootflash(manifest_path: str, hisi: str):
         flasher = ImageFlasher()
-        flasher.connect_serial()
 
         tree = Bootloaders.load(manifest_path)
         el   = tree.find(hisi)
         idx  = 0
-        for f_img in tree.extract_images(el):
-            role = el['imgs'][idx]['role']
-            addr = el['imgs'][idx]['addr']
-            print("%s+ 💾 Flashing %s"% (S_SEP, role), end=S_SEP)
 
-            with open(f_img, "rb") as f:
-                flasher.send_data(f, os.fstat(f.fileno()).st_size, addr)
-            idx += 1
-        print("🍀 Bootloader uploaded.", end='\n\n')
+        if flasher.connect_serial():
+            for f_img in tree.extract_images(el):
+                role = el['imgs'][idx]['role']
+                addr = el['imgs'][idx]['addr']
+                idx += 1
+                print("%s+ 💾 Flashing %s"% (S_SEP, role), end=S_SEP)
+
+                with open(f_img, "rb") as f:
+                    flasher.send_data(f, os.fstat(f.fileno()).st_size, addr)
+            print("🍀 Bootloader uploaded.", end='\n\n')
 
     @staticmethod
     def testimage(manifest_path: str, hisi: str):
@@ -138,7 +141,7 @@ class ImageFlasher:
             idx += 1
         print("%s; 🛂 Passes: %d"% (E_SEP[1:], nok), end='\n\n')
 
-    def connect_serial(self, device=None):
+    def connect_serial(self, device=None) -> bool:
         print("🔍 Waiting for device in IDT mode")
         while not device:
             ports = serial.tools.list_ports.comports(include_links=False)
