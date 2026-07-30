@@ -8,15 +8,15 @@
 # Made by OpenA @ 2026
 #
 
-import os, sys, re, time, binascii
+import os, argparse, re, time, binascii
 
 class ImageExtractor:
 
     IMAGE_HEADER_ID = b'\x55\xAA\x5A\xA5'
 
-    def __init__(self):
-        self._filter = re.compile(r'.+')
-        self._crc_check = True
+    def __init__(self, crc_check=True, filter=''):
+        self._filter = re.compile(filter or r'.+')
+        self._crc_check = crc_check
 
     def dump_img(self, f, out_dir: str = ''):
         ## 'UPDATE.APP' data structure
@@ -141,29 +141,25 @@ class ImageExtractor:
                     self.dump_img(f, out_dir)
 
 if __name__ == '__main__':
-    hwu = ImageExtractor()
-    app_path = out_dir = ''
-    for a in sys.argv[1:]:
-        if a == '-h' or a == '--help':
-            print("")
-            print("appextractor.py [-N|--filter='RECOVERY*'] <UPDATE.APP> [<output_dir>]", end='\n\n')
-            print("  -N, --no-crc-check    Disable checksum test")
-            print("      --filter=*        Extract only specific .img according to regex", end='\n\n')
-            exit()
-        elif a == '-N' or '--no-crc-check':
-            hwu._crc_check = False
-        elif a.startswith('--filter='):
-            hwu._filter = re.compile(a[9:])
-        elif not app_path: app_path = a
-        else             : out_dir  = a
 
-    if not os.path.isfile(app_path):
-        print(f"\n file '{app_path}' - is not exist!", end='\n\n')
-        exit()
-    if not out_dir:
-        d = os.path.dirname (app_path)
-        b = os.path.basename(app_path)
-        out_dir = os.path.join(d, b.replace('.', '_'))
-    if not os.path.isdir(out_dir):
-        os.mkdir(out_dir)
-    hwu.extract(app_path, out_dir)
+    parser = argparse.ArgumentParser(
+        usage="\n  appextractor.py [--filter='RECOVERY*'] [--output=<name|path>] <UPDATE.APP>",
+        description="A tool for extract .img files from Huawei UPDATE.APP pack."
+    )
+    parser.add_argument("-N", "--no-crc-check", help="disable checksum test", action="store_true")
+    parser.add_argument("-O", "--output"      , help="name or path of directory, where will extract files")
+    parser.add_argument("-F", "--filter"      , help="extract only specific .img according to regex")
+    parser.add_argument(      "app_path"      , help="path to UPDATE.APP file")
+
+    args = parser.parse_args()
+    if os.path.isfile(args.app_path):
+        hwu = ImageExtractor(crc_check=not args.no_crc_check, filter=args.filter)
+        if not args.output:
+            d = os.path.dirname (args.app_path)
+            b = os.path.basename(args.app_path)
+            args.output = os.path.join(d, b.replace('.', '_'))
+        if not os.path.isdir(args.output):
+            os.mkdir(args.output)
+        hwu.extract(args.app_path, args.output)
+    else:
+        print(f"\n file '{args.app_path}' - is not exist!", end='\n\n')
