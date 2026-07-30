@@ -8,7 +8,7 @@
 # Made by OpenA @ 2026
 #
 
-import os, argparse, re, time, binascii
+import os, argparse, re, time, binascii, crcmod
 
 class ImageExtractor:
 
@@ -70,7 +70,7 @@ class ImageExtractor:
             if self._crc_check:
                 print(f"  ⏳ Checksum...", end='\r')
                 perf_t = time.process_time()
-                crc_ok = self.crc_check(img_path, crc_data)
+                crc_ok = self.crc_x25_check(img_path, crc_data)
                 shortCRC = binascii.b2a_hex(crc_data[0:6]).decode()
                 if hashLen > 6:
                     shortCRC += '...'
@@ -85,28 +85,20 @@ class ImageExtractor:
             # We can ignore the remaining padding.
             f.seek(remaind, os.SEEK_CUR)
 
-    # Find the next file block in the main file
-    @staticmethod
-    def crc16(data: bytes) -> int:
-        crc = 0xFFFF
-        for b in data:
-            for i in range(0,8):
-                crc = (crc >> 1) ^ (0x8408 if (crc ^ b) & 1 else 0)
-                b >>= 1
-        crc = (~crc) & 0xFFFF
-        # Swap high and low bytes to match the final assembly operations
-        return crc # (crc >> 8) | (crc << 8)
+    # Huawei packs stores CRC-16/X-25 sums of every 4096 bytes
+    crc_x25_calc = crcmod.mkCrcFun(0x11021, initCrc=0x0000, rev=True, xorOut=0xFFFF)
 
     # Find the next file block in the main file
     @staticmethod
-    def crc_check(file_path: str, crc_data: bytes) -> int:
+    def crc_x25_check(file_path: str, crc_data: bytes) -> int:
         crc_ok = True
         with open(file_path, mode='rb') as m:
             k = 0
             while k < len(crc_data):
                 chunk = m.read(4096)
-                c_sum = int.from_bytes(crc_data[k:k+2], 'little', signed=False)
-                if c_sum != ImageExtractor.crc16(chunk):
+                c_dat = int.from_bytes(crc_data[k:k+2], 'little', signed=False)
+                c_val = ImageExtractor.crc_x25_calc(chunk)
+                if c_dat != c_val:
                     crc_ok = False
                 k += 2
         return crc_ok
