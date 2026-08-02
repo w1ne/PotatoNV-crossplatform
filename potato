@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+
+# Script original-made by OpenA
+export USRLOCK_PROG='potato'
+export USRLOCK_HOME_URL='https://github.com/OpenA-forks/PotatoNV-cross-gui'
+export USRLOCK_INFO="
+ ,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+ ; Command-line tool for helps to unlocking you device.
+ ''''''''''''''''''''''''''''''''''''''''''''''''''''''
+ :.. homepage: $USRLOCK_HOME_URL
+ :... license: GNU AGPL3
+ "
+export USRLOCK_HELP='<command> [options] <filename>'
+export USRLOCK_DEV_TAB="$USRLOCK_HOME_URL/tree/main-rework/bootloaders#tested-devices"
+export USRLOCK_WARN="
+  Access to '/dev/ttyUSB0' requires dialout group permissions
+  Add you user to the memberships (and reboot):
+     sudo usermod -a -G dialout $USER
+ "
+
+manifest="$PWD/bootloaders/manifest.json"
+
+case $1 in
+	b | bootloader)
+		USRLOCK_HELP='bootloader [--search=PRA|hisiXXX]'
+		if [ ! -z "$(groups $USER | grep dialout)" ] || [ `id -u` -eq 0 ];
+			then USRLOCK_WARN=''
+		fi
+		;;
+	f | fastboot)
+		USRLOCK_HELP='fastboot [--key=%s] [--fblock=0]'
+		;;
+	e | extract)
+		USRLOCK_HELP='extract [--search='RECOVERY*'] <UPDATE.APP>'
+		manifest=''
+		;;
+	g | gui)
+		USRLOCK_HELP='gui'
+		manifest='ui/main_window.ui'
+		;;
+	-h | help)
+		python3 -m usrlock -h
+		exit
+		;;
+	-C) shift ;;
+esac
+
+python3 -m usrlock -C "$@" "$manifest"

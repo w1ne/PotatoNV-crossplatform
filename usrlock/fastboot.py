@@ -5,7 +5,7 @@
 #
 # Reworked by OpenA @ 2026
 #
-import sys, usb, hashlib
+import usb, hashlib
 
 HUAWEI_VENDOR_ID = 0x12D1
 
@@ -159,11 +159,7 @@ class Fastboot:
                 return device[idx]
         return device
 
-    @staticmethod
-    def usrlock(key: str = '', fblock: str = ''):
-
-        sha = hashlib.sha256()
-        fb  = Fastboot()
+    def usrlock(self, key: str = '', fblock: str = ''):
 
         if key and len(key) != 16:
             print(f"🚫 USRKEY must be a 16-char string ({len(key)} == '{key}')")
@@ -173,26 +169,18 @@ class Fastboot:
             print(f"🚫 FBLOCK value must between 0-1 (you pass: {fblock})")
             return
 
-        if fb.connect():
-            quit = not not fblock or not not key
-            wipe = not not fblock
+        if fblock:
+            self.write_nvme('FBLOCK', fblock.encode())
+        if key:
+            sha = hashlib.sha256(key.encode())
+            self.write_nvme('USRKEY', sha.digest())
+            self.write_nvme('WVLOCK', key.encode())
+            if 'y' == input("🚧 Attempt to OEM unlock? (y/n) "):
+                self.oem_unlock(key)
 
-            if fblock:
-                fb.write_nvme('FBLOCK', fblock.encode())
-            if key:
-                sha.update(key.encode())
-                fb.write_nvme('USRKEY', sha.digest())
-                fb.write_nvme('WVLOCK', key.encode())
-                if 'y' == input("🚧 Attempt to OEM unlock? (y/n) "):
-                    fb.oem_unlock(key)
-                    wipe = True
-
-            if wipe and 'y' == input("🚧 Do FRP/Data wipe before reboot...? (y/n) "):
-                fb.erase('frp', 'userdata')
-            if quit and 'y' == input("🚧 Want to reboot? (y/n) "):
-                fb.reboot()
-            else:
-                fb.command()
-
-if __name__ == '__main__':
-    Fastboot.usrlock( key=sys.argv[1], fblock=sys.argv[2] )
+        if 'y' == input("🚧 Do FRP/Data wipe before reboot...? (y/n) "):
+            self.erase('frp', 'userdata')
+        if 'y' == input("🚧 Want to reboot? (y/n) "):
+            self.reboot()
+        else:
+            self.command()

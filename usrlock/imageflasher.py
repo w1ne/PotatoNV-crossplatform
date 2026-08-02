@@ -6,9 +6,8 @@
 #
 # Modyfied by OpenA @ 2026
 #
-import serial, os, sys, time, binascii
+import serial, os, hashlib, time, binascii
 import serial.tools.list_ports
-from  bootloaders import Bootloaders
 
 S_SEP = f"\n:{'*' * 32}\n"
 E_SEP = f"\n;{'-' * 32}\n"
@@ -108,38 +107,38 @@ class ImageFlasher:
         time.sleep(0.5)
 
     @staticmethod
-    def bootflash(manifest_path: str, hisi: str):
+    def boot_flash(el: dict, img_paths: list[str]):
         flasher = ImageFlasher()
-
-        tree = Bootloaders.load(manifest_path)
-        el   = tree.find(hisi)
         idx  = 0
 
         if flasher.connect_serial():
-            for f_img in tree.extract_images(el):
+            for p_img in img_paths:
                 role = el['imgs'][idx]['role']
                 addr = el['imgs'][idx]['addr']
                 idx += 1
                 print("%s+ 💾 Flashing %s"% (S_SEP, role), end=S_SEP)
 
-                with open(f_img, "rb") as f:
+                with open(p_img, 'rb') as f:
                     flasher.send_data(f, os.fstat(f.fileno()).st_size, addr)
             print("🍀 Bootloader uploaded.", end='\n\n')
 
     @staticmethod
-    def testimage(manifest_path: str, hisi: str):
-        tree = Bootloaders.load(manifest_path)
-        el   = tree.find(hisi)
-        idx  = nok = 0
+    def test_hash(el: dict, img_paths: list[str]):
+        idx = mis = 0
         print("%s; 🛅 Testing images \033[1m%s\033[0m"% (S_SEP, el['path']), end=S_SEP)
-        for sha1 in tree.hash_images(el):
+        for p_img in img_paths:
+            sha1 = hashlib.sha1()
             role = el['imgs'][idx]['role']
             hash = el['imgs'][idx]['hash']
-            cmp  = hash == sha1
-            print('; ┌ %s.img ┐\n; └── \033[1;37;42m%s\033[0m\n;   ╚ \033[1;37;4%dm%s\033[0m'% (role, hash, cmp+1, sha1))
-            nok += cmp
+            print('; ┌ %s.img ┐\n; └── \033[1;37;42m%s\033[0m'% (role, hash))
+            with open(p_img, 'rb') as f:
+                while chunk := f.read(4096):
+                    sha1.update(chunk)
+            hsum = sha1.hexdigest()
+            print(';   ╚ \033[1;37;4%dm%s\033[0m'% ((hsum == hash) + 1, hsum))
+            mis += hash != hsum
             idx += 1
-        print("%s; 🛂 Passes: %d"% (E_SEP[1:], nok), end='\n\n')
+        print("%s; 🛂 Passed %d/%d"% (E_SEP[1:], idx - mis, idx), end='\n\n')
 
     def connect_serial(self, device=None) -> bool:
         print("🔍 Waiting for device in IDT mode")
@@ -167,11 +166,3 @@ class ImageFlasher:
             self.serial.close()
         except:
             pass
-
-if __name__ == '__main__':
-    path = sys.argv[1]
-    hisi = sys.argv[2]
-    if hisi.startswith('test:'):
-        ImageFlasher.testimage( path, hisi[5:] )
-    else:
-   	    ImageFlasher.bootflash( path, hisi )

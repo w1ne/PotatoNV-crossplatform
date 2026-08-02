@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
-
-# Huawei 'UPDATE.APP' files Extractor.
 #
-# Reworked from:
-# * https://github.com/96boards-hikey/tools-images-hikey970/blob/hikey970_v1.0/hisi-idt.py
+# Module for extracting .img files from Huawei 'UPDATE.APP' packs.
+#
+# Based on:
+# * https://github.com/marcominetti/split_updata.pl
 # 
 # Made by OpenA @ 2026
 #
 
-import os, argparse, re, time, binascii, crcmod
+import os, re, time, binascii, crcmod
 
 class ImageExtractor:
 
@@ -88,7 +87,6 @@ class ImageExtractor:
     # Huawei packs stores CRC-16/X-25 sums of every 4096 bytes
     crc_x25_calc = crcmod.mkCrcFun(0x11021, initCrc=0x0000, rev=True, xorOut=0xFFFF)
 
-    # Find the next file block in the main file
     @staticmethod
     def crc_x25_check(file_path: str, crc_data: bytes) -> int:
         crc_ok = True
@@ -128,30 +126,18 @@ class ImageExtractor:
 
     def extract(self, path_to_app: str, out_dir: str = ''):
         with open(path_to_app, mode='rb') as f:
+            out_dir = self.touch_output(path_to_app, out_dir)
+            # Find the next img block in the file
             while magic := f.read(4):
                 if magic == self.IMAGE_HEADER_ID:
                     self.dump_img(f, out_dir)
 
-if __name__ == '__main__':
-
-    parser = argparse.ArgumentParser(
-        usage="\n  appextractor.py [--filter='RECOVERY*'] [--output=<name|path>] <UPDATE.APP>",
-        description="A tool for extract .img files from Huawei UPDATE.APP pack."
-    )
-    parser.add_argument("-N", "--no-crc-check", help="disable checksum test", action="store_true")
-    parser.add_argument("-O", "--output"      , help="name or path of directory, where will extract files")
-    parser.add_argument("-F", "--filter"      , help="extract only specific .img according to regex")
-    parser.add_argument(      "app_path"      , help="path to UPDATE.APP file")
-
-    args = parser.parse_args()
-    if os.path.isfile(args.app_path):
-        hwu = ImageExtractor(crc_check=not args.no_crc_check, filter=args.filter)
-        if not args.output:
-            d = os.path.dirname (args.app_path)
-            b = os.path.basename(args.app_path)
-            args.output = os.path.join(d, b.replace('.', '_'))
-        if not os.path.isdir(args.output):
-            os.mkdir(args.output)
-        hwu.extract(args.app_path, args.output)
-    else:
-        print(f"\n file '{args.app_path}' - is not exist!", end='\n\n')
+    @staticmethod
+    def touch_output(app_path: str, out_dir: str) -> str:
+        if not out_dir:
+            f_path  = os.path.dirname (app_path)
+            f_name  = os.path.basename(app_path)
+            out_dir = os.path.join(f_path, f_name.replace('.', '_'))
+        if not os.path.isdir(out_dir):
+            os.mkdir(out_dir)
+        return out_dir
