@@ -41,10 +41,11 @@ class ImageFlasher:
         try:
             self.serial.reset_output_buffer()
             self.serial.reset_input_buffer()
-            self.serial.write(data)
+            if self.serial.write(data) != len(data):
+                return False
             ack = self.serial.read(1)
-            if ack and ack != self.ack:
-                print("⛔ Invalid ACK from device! Read: 0x%x, excepted: 0x%x"% (ack, self.ack[0]), end='\n\n')
+            if ack != self.ack:
+                print(f"Invalid or missing ACK: {ack!r}; expected {self.ack!r}")
                 return False
         except Exception as e:
             print(f"⛔ {e}", end='\n\n')
@@ -78,52 +79,44 @@ class ImageFlasher:
         data.append((~ n) & 0xFF)
         return self.send_frame(bytes(data))
 
-    def send_data(self, data: bytes, length: int, address: int):
+    def send_data(self, data, length: int, address: int) -> bool:
         if isinstance(data, bytes):
             length = len(data)
-        n_frames = length // MAX_DATA_LEN + (1 if length % MAX_DATA_LEN > 0 else 0)
+        n_frames = (length + MAX_DATA_LEN - 1) // MAX_DATA_LEN
         if not self.send_head_frame(length, address):
-            return
-        n = 0
-        print(f"; 🗃️  Sending data frames:", end='\n;> [0/0] ..')
-        while length > MAX_DATA_LEN:
-            if isinstance(data, bytes):
-                f = data[n * MAX_DATA_LEN:(n + 1) * MAX_DATA_LEN]
-            else:
-                f = data.read(MAX_DATA_LEN)
-            if not self.send_data_frame(n + 1, f, n_frames):
-                return
-            n += 1
-            length -= MAX_DATA_LEN
-        if length:
-            if isinstance(data, bytes):
-                f = data[n * MAX_DATA_LEN:]
-            else:
-                f = data.read()
-            if not self.send_data_frame(n + 1, f, n_frames):
-                return
-            n += 1
-        self.send_tail_frame(n + 1)
+            return False
+        for n in range(n_frames):
+            count = min(length - n * MAX_DATA_LEN, MAX_DATA_LEN)
+            chunk = data[n * MAX_DATA_LEN:n * MAX_DATA_LEN + count] if isinstance(data, bytes) else data.read(count)
+            if len(chunk) != count or not self.send_data_frame(n + 1, chunk, n_frames):
+                return False
+        if not self.send_tail_frame(n_frames + 1):
+            return False
         time.sleep(0.5)
+        return True
 
     @staticmethod
-    def boot_flash(el: dict, img_paths: list[str]):
+    def boot_flash(el, img_paths):
+        if not ImageFlasher.test_hash(el, img_paths):
+            raise ValueError("Bootloader checksum mismatch")
         flasher = ImageFlasher()
-        idx  = 0
-
-        if flasher.connect_serial():
-            for p_img in img_paths:
-                role = el['imgs'][idx]['role']
-                addr = el['imgs'][idx]['addr']
-                idx += 1
-                print("%s+ 💾 Flashing %s"% (S_SEP, role), end=S_SEP)
-
-                with open(p_img, 'rb') as f:
-                    flasher.send_data(f, os.fstat(f.fileno()).st_size, addr)
-            print("🍀 Bootloader uploaded.", end='\n\n')
+        try:
+            if not flasher.connect_serial():
+                return False
+            for item, image in zip(el['imgs'], img_paths):
+                with open(image, 'rb') as source:
+                    if not flasher.send_data(source, os.fstat(source.fileno()).st_size, item['addr']):
+                        return False
+            print("Bootloader uploaded.")
+            return True
+        finally:
+            if flasher.serial is not None:
+                flasher.serial.close()
 
     @staticmethod
     def test_hash(el: dict, img_paths: list[str]):
+        if len(el['imgs']) != len(img_paths):
+            return False
         idx = mis = 0
         print("%s; 🛅 Testing images \033[1m%s\033[0m"% (S_SEP, el['path']), end=S_SEP)
         for p_img in img_paths:
@@ -139,6 +132,8 @@ class ImageFlasher:
             mis += hash != hsum
             idx += 1
         print("%s; 🛂 Passed %d/%d"% (E_SEP[1:], idx - mis, idx), end='\n\n')
+
+        return mis == 0
 
     def connect_serial(self, device=None) -> bool:
         print("🔍 Waiting for device in IDT mode")

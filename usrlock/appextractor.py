@@ -1,143 +1,96 @@
-#
-# Module for extracting .img files from Huawei 'UPDATE.APP' packs.
-#
-# Based on:
-# * https://github.com/marcominetti/split_updata.pl
-# 
-# Made by OpenA @ 2026
-#
+# UPDATE.APP extractor based on marcominetti/split_updata.pl.
+# Original Python implementation by OpenA, 2026.
+import os
+from pathlib import Path
+import re
+import struct
+import crcmod
 
-import os, re, time, binascii, crcmod
 
 class ImageExtractor:
-
     IMAGE_HEADER_ID = b'\x55\xAA\x5A\xA5'
+    crc_x25_calc = staticmethod(crcmod.mkCrcFun(0x11021, initCrc=0, rev=True, xorOut=0xFFFF))
 
     def __init__(self, crc_check=True, filter=''):
         self._filter = re.compile(filter or r'.+')
         self._crc_check = crc_check
 
-    def dump_img(self, f, out_dir: str = ''):
-        ## 'UPDATE.APP' data structure
-        # * First 92 bytes are 0x00
-        # * Each file are started with 55AA 5AA5
-        # +  4 bytes for Header Length
-        # +  4 bytes for Unknown1
-        # +  8 bytes for Hardware ID
-        # +  4 bytes for File Sequence
-        # +  4 bytes for File Size
-        # + 16 bytes for File Date
-        # + 16 bytes for File Time
-        # + 16 bytes for File Type
-        # + 16 bytes for Blank1
-        # +  2 bytes for Header Checksum
-        # +  2 bytes for BlockSize
-        # +  2 bytes for Blank2
-        # +  (headerLen - 98) for calc file checksum
-        # +  (fileSize) of .img data
-        # *  padding bytes
-        headerLen= int.from_bytes(f.read(4), 'little', signed=False)
-        crcLen   = headerLen - 98
-        _______  = f.read(4) # Unknown1
-        hardwarId= f.read(8)
-        fileSeq  = f.read(4)
-        fileSize = int.from_bytes(f.read(4), 'little', signed=False)
-        fileDate = f.read(16).strip(b'\0').decode()
-        fileTime = f.read(16).strip(b'\0').decode()
-        fileName = f.read(16).strip(b'\0').decode()
-        ________ = f.seek(16+2+2+2, os.SEEK_CUR) # Blank1 + HeaderChecksum + BlockSize + Blank2
+    @staticmethod
+    def _read_exact(stream, size):
+        data = stream.read(size)
+        if len(data) != size:
+            raise ValueError('Truncated UPDATE.APP record')
+        return data
 
-        hashLen  = headerLen - 98
-        numBytes = self.pretty_bytes(fileSize)
-        fileTime = fileTime.replace('.',':')
-
-        if self._filter.search(fileName):
-            print(f"📂 Extracting...")
-            crc_data = f.read(hashLen)
-            img_path = os.path.join(out_dir, fileName+'.img')
-
-            with open(img_path, mode='wb') as o:
-                i = 0
-                while   i < fileSize:
-                    l_max = fileSize - i
-                    chunk = f.read(l_max if l_max < 4096 else 4096)
-                    i    += o.write(chunk)
-
-            print(f"  💽 {fileName}.img ~ {numBytes}")
-            print(f"  🗓️  Created - {fileDate} {fileTime}")
-            
-            if self._crc_check:
-                print(f"  ⏳ Checksum...", end='\r')
-                perf_t = time.process_time()
-                crc_ok = self.crc_x25_check(img_path, crc_data)
-                shortCRC = binascii.b2a_hex(crc_data[0:6]).decode()
-                if hashLen > 6:
-                    shortCRC += '...'
-                print("  %s Checksum [ %s ] ~ %.3f sec."% (
-                    '✅' if crc_ok else '🅾️ ', shortCRC, time.process_time() - perf_t))
+    def dump_img(self, stream, out_dir=''):
+        start = stream.tell() - 4
+        header = self.IMAGE_HEADER_ID + self._read_exact(stream, 94)
+        header_size = struct.unpack_from('<I', header, 4)[0]
+        size = struct.unpack_from('<I', header, 24)[0]
+        end = os.fstat(stream.fileno()).st_size
+        if header_size < 98 or start + header_size + size > end:
+            raise ValueError('Invalid or truncated UPDATE.APP record length')
+        crc_size = header_size - 98
+        expected_crc_size = ((size + 4095) // 4096) * 2
+        if self._crc_check and crc_size != expected_crc_size:
+            raise ValueError('Missing or invalid UPDATE.APP checksum table')
+        name = header[60:76].split(b'\0', 1)[0].decode('ascii')
+        if not re.fullmatch(r'[A-Za-z0-9_][A-Za-z0-9_.-]*', name):
+            raise ValueError('Unsafe UPDATE.APP image name')
+        if not self._filter.search(name):
+            stream.seek(start + header_size + size)
         else:
-            f.seek(fileSize + hashLen, os.SEEK_CUR)
-            print(f'🗑️ Skipping {fileName}.img\t{fileDate}\t{numBytes}')
-
-        remaind = 4 - (f.tell() % 4)
-        if remaind < 4:
-            # We can ignore the remaining padding.
-            f.seek(remaind, os.SEEK_CUR)
-
-    # Huawei packs stores CRC-16/X-25 sums of every 4096 bytes
-    crc_x25_calc = crcmod.mkCrcFun(0x11021, initCrc=0x0000, rev=True, xorOut=0xFFFF)
-
-    @staticmethod
-    def crc_x25_check(file_path: str, crc_data: bytes) -> int:
-        crc_ok = True
-        with open(file_path, mode='rb') as m:
-            k = 0
-            while k < len(crc_data):
-                chunk = m.read(4096)
-                c_dat = int.from_bytes(crc_data[k:k+2], 'little', signed=False)
-                c_val = ImageExtractor.crc_x25_calc(chunk)
-                if c_dat != c_val:
-                    crc_ok = False
-                k += 2
-        return crc_ok
-
-    @staticmethod
-    def pretty_bytes(size: int):
-        if size < 1e3: return '%d B'   % size
-        if size < 1e4: return '%.2f KB'% (float(size) / 1e3)
-        if size < 1e6: return '%.1f KB'% (float(size) / 1e3)
-        if size < 1e7: return '%.2f MB'% (float(size) / 1e6) # ~ 1.52  Mb
-        if size < 1e9: return '%.1f MB'% (float(size) / 1e6) # ~ 48.3  Mb
-        else         : return '%.2f GB'% (float(size) / 1e9)
+            checksums = self._read_exact(stream, crc_size)
+            target = Path(out_dir) / (name + '.img')
+            # Exclusive creation prevents following existing output symlinks or
+            # silently replacing files from a previous extraction.
+            with target.open('xb') as output:
+                try:
+                    remaining = size
+                    block = 0
+                    while remaining:
+                        chunk = self._read_exact(stream, min(4096, remaining))
+                        if self._crc_check:
+                            expected = int.from_bytes(checksums[block: block+2], 'little')
+                            if self.crc_x25_calc(chunk) != expected:
+                                raise ValueError('Checksum mismatch for ' + name)
+                        output.write(chunk)
+                        remaining -= len(chunk)
+                        block += 2
+                except BaseException:
+                    output.close()
+                    target.unlink()
+                    raise
+            print('Extracted ' + str(target))
+        stream.seek((-stream.tell()) % 4, os.SEEK_CUR)
 
     @staticmethod
-    def parse_filters(match: str):
-        s = i = 0
-        out = []
-        for c in match:
-            if c == ',' or c == ' ':
-                if s != i:
-                    out.append(match[s:i])
-                s = i + 1
-            i += 1
-        if s != i:
-            out.append(match[s:])
-        return out
+    def crc_x25_check(file_path, crc_data):
+        size = os.path.getsize(file_path)
+        if len(crc_data) != ((size + 4095) // 4096) * 2:
+            return False
+        with open(file_path, 'rb') as source:
+            for index in range(0, len(crc_data), 2):
+                if ImageExtractor.crc_x25_calc(source.read(4096)) != int.from_bytes(crc_data[index:index+2], 'little'):
+                    return False
+        return True
 
-    def extract(self, path_to_app: str, out_dir: str = ''):
-        with open(path_to_app, mode='rb') as f:
+    def extract(self, path_to_app, out_dir=''):
+        count = 0
+        with open(path_to_app, 'rb') as stream:
             out_dir = self.touch_output(path_to_app, out_dir)
-            # Find the next img block in the file
-            while magic := f.read(4):
+            while True:
+                magic = stream.read(4)
+                if not magic:
+                    break
                 if magic == self.IMAGE_HEADER_ID:
-                    self.dump_img(f, out_dir)
+                    self.dump_img(stream, out_dir)
+                    count += 1
+            if not count:
+                raise ValueError('No UPDATE.APP image records found')
 
     @staticmethod
-    def touch_output(app_path: str, out_dir: str) -> str:
-        if not out_dir:
-            f_path  = os.path.dirname (app_path)
-            f_name  = os.path.basename(app_path)
-            out_dir = os.path.join(f_path, f_name.replace('.', '_'))
-        if not os.path.isdir(out_dir):
-            os.mkdir(out_dir)
-        return out_dir
+    def touch_output(app_path, out_dir):
+        target = Path(out_dir) if out_dir else Path(app_path).with_name(Path(app_path).name.replace('.', '_'))
+        target.mkdir(parents=True, exist_ok=True)
+        return str(target)

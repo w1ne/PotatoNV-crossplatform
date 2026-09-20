@@ -1,54 +1,49 @@
-
-import os, json, tarfile
+# Bootloader archive support originally by OpenA, 2026.
+import json
+from pathlib import Path
+import re
+import shutil
+import tarfile
 
 BOOTLOADERS_ARC = 'HiSiBootloaders.tar.xz'
 
-class Bootloaders():
 
-    def __init__(self, wrkdir: str, lst: list = []):
-        self._lst = lst
-        self._dir = wrkdir
+class Bootloaders:
+    def __init__(self, wrkdir, lst=None):
+        self._lst = [] if lst is None else lst
+        self._dir = str(Path(wrkdir).resolve())
 
-    def wrkdir(self) -> str:
+    def wrkdir(self):
         return self._dir
 
-    def items(self) -> list:
+    def items(self):
         return self._lst
 
-    def find(self, kw: str) -> dict | None:
-        for el in self._lst:
-            if kw == el['path'] or kw in el['dev_models']:
-                return el
-        return None
+    def find(self, kw):
+        return next((el for el in self._lst if kw == el['path'] or kw in el['dev_models']), None)
 
-    #def hash_images(self, el: dict) -> list[str]:
-    #    idx = 0
-    #    out = []
-    #    for f_img in self.extract_images(el):
-    #        sha1 = hashlib.sha1()
-    #        with open(f_img, "rb") as f:
-    #            while chunk := f.read(4096):
-    #                sha1.update(chunk)
-    #            out.append(sha1.hexdigest())
-    #        idx += 1
-    #    return out
-
-    def extract_images(self, el: dict) -> list[str]:
-        i = BOOTLOADERS_ARC.rfind('.') + 1
-        p = os.path.join(self._dir, BOOTLOADERS_ARC)
+    def extract_images(self, el):
         out = []
-        # Open the archive (works for .tar, .tar.gz, .tgz, etc.)
-        with tarfile.open(p, 'r:'+ BOOTLOADERS_ARC[i:]) as tar:
+        root = Path(self._dir)
+        with tarfile.open(root / BOOTLOADERS_ARC, 'r:xz') as archive:
             for img in el['imgs']:
-                img_path = os.path.join(self._dir, el['path'], img['role'] +'.img')
-            	# Extract a single file by its exact path inside the archive
-                if not os.path.isfile(img_path):
-                	tar.extract('bootloaders/%s/%s.img'% (el['path'], img['role']))
-                out.append(img_path)
+                if not all(re.fullmatch(r'[A-Za-z0-9_-]+', value) for value in (el['path'], img['role'])):
+                    raise ValueError('Unsafe bootloader path')
+                target = root / el['path'] / (img['role'] + '.img')
+                target.parent.mkdir(exist_ok=True)
+                if target.parent.is_symlink() or target.is_symlink():
+                    raise ValueError('Bootloader output cannot be a symlink')
+                if not target.exists():
+                    member = archive.getmember('bootloaders/%s/%s.img' % (el['path'], img['role']))
+                    if not member.isfile():
+                        raise ValueError('Bootloader archive member must be a regular file')
+                    with archive.extractfile(member) as source, target.open('xb') as output:
+                        shutil.copyfileobj(source, output)
+                out.append(str(target))
         return out
 
     @staticmethod
-    def load( manifest_path: str):
-        with open( manifest_path, 'r') as f:
-            wrkdir = os.path.dirname(manifest_path)
-            return Bootloaders(wrkdir, json.load(f))
+    def load(manifest_path):
+        manifest = Path(manifest_path).resolve()
+        with manifest.open() as source:
+            return Bootloaders(manifest.parent, json.load(source))

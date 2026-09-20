@@ -5,7 +5,9 @@
 #
 # Reworked by OpenA @ 2026
 #
-import usb, hashlib
+import usb.core
+import usb.util
+import hashlib
 
 HUAWEI_VENDOR_ID = 0x12D1
 
@@ -18,6 +20,7 @@ class Fastboot:
     TIMEOUT_WRITE = 1500
 
     def __init__(self):
+        self._device = None
         self._s_name = None
         self._w_port = None
         self._r_port = None
@@ -26,79 +29,77 @@ class Fastboot:
         return self._w_port != None and self._r_port != None
 
     def connect(self) -> bool:
-        fb_dev = self.select_usb_device()
-        if fb_dev is not None:
-            self._s_name = fb_dev.serial_number or '%x:%x'%(fb_dev.idVendor,fb_dev.idProduct)
+        device = self.select_usb_device()
+        if device is None:
+            return False
+        self._device = device
+        config = device.get_active_configuration()
+        interface = usb.util.find_descriptor(config, bInterfaceClass=0xff,
+                                             bInterfaceSubClass=0x42,
+                                             bInterfaceProtocol=3)
+        if interface is None:
+            raise RuntimeError("No active fastboot interface")
+        number = interface.bInterfaceNumber
+        try:
+            if device.is_kernel_driver_active(number):
+                device.detach_kernel_driver(number)
+        except NotImplementedError:
+            pass  # Windows backends do not support kernel driver queries.
+        usb.util.claim_interface(device, number)
+        for endpoint in interface:
+            if usb.util.endpoint_type(endpoint.bmAttributes) != usb.util.ENDPOINT_TYPE_BULK:
+                continue
+            if usb.util.endpoint_direction(endpoint.bEndpointAddress) == usb.util.ENDPOINT_IN:
+                self._r_port = endpoint
+            else:
+                self._w_port = endpoint
+        if not self.is_ready():
+            raise RuntimeError("Fastboot bulk endpoints not found")
+        return True
 
-            print(f"| 📲 Connect to \033[1m{self._s_name}\033[0m")
-            try:
-                # fb_dev.reset() -- generate exception
-                if fb_dev.is_kernel_driver_active(0):
-                    fb_dev.detach_kernel_driver(0)
-            except usb.USBError as error:
-                print(f"| ⚠️  Failed \033[1m{self._s_name}\033[0m {error}"+ E_SEP)
-                return False
+    def close(self):
+        if self._device is not None:
+            usb.util.dispose_resources(self._device)
+        self._device = self._r_port = self._w_port = None
 
-            for cfg in fb_dev:
-                for iface in cfg:
-                    for ep in iface:
-                        if usb.core.util.endpoint_direction(ep.bEndpointAddress) == usb.core.util.ENDPOINT_IN:
-                            self._r_port = ep
-                        else:
-                            self._w_port = ep
-            _____ = self.recv() # clear buffer
-            print("| ✅ Ready to communicate."+ E_SEP)
-            return True
-        return False
+    def _execute(self, command):
+        if not self.send(command):
+            raise RuntimeError("Fastboot command was not sent")
+        response = self.recv()
+        if not response.startswith(b'OKAY'):
+            raise RuntimeError("Fastboot command failed: " + response.decode(errors='replace'))
+        return response[4:]
 
-    def write_nvme(self, prop: str, data: bytes):
-        print(f"🍥 Writing {prop} data to NVE...")
-        done = self.send(f'getvar:nve:{prop}@'.encode() + data)
-        resp = self.recv().decode()
-        if not done or resp.startswith('FAIL'):
-              print(f"❌ Failed to write {prop}. {resp[4:]}", end='\n\n')
-        else: print(f"🧩 Write {prop} {resp}", end='\n\n')
+    def write_nvme(self, prop, data):
+        self._execute(('getvar:nve:' + prop + '@').encode() + data)
+        print('Updated ' + prop)
 
-    def erase(self, *parts: str):
-        print("🧹 Erasing partitions...")
-        for p in parts:
-            d = self.send(f'erase:{p}'.encode())
-            r = self.recv().decode()
-            if not d or r.startswith('FAIL'):
-                  print(f"❌ Failed '{p}' {r[4:]}")
-            else: print(f"✔️  Erased '{p}' {r}")
-        print("")
+    def erase(self, *parts):
+        for part in parts:
+            self._execute(('erase:' + part).encode())
+            print('Erased ' + part)
 
-    def oem_unlock(self, key: str):
-        print("📦 Sending OEM Key...")
-        done = self.send(b'oem unlock '+ key.encode())
-        resp = self.recv().decode()
-        if not done or resp.startswith('FAIL'):
-              print(f"❌ OEM Unlock failed. {resp[4:]}", end='\n\n')
-        else: print(f"✅ Successful OEM unlocking. {resp}", end='\n\n')
+    def oem_unlock(self, key):
+        self._execute(('oem unlock ' + key).encode())
+        print('OEM unlock completed')
 
-    def send(self, cmd: bytes) -> bool:
-        done = False
-        while not done:
-            try:
-                self._w_port.write(cmd, self.TIMEOUT_WRITE)
-                done = True
-            except usb.USBError as error:
-                if 'y' != input(f"⚠️  {error}\n ** Retry? (y/n) "):
-                    break
-        return done
+    def send(self, command):
+        if not self.is_ready():
+            raise RuntimeError("Fastboot is not connected")
+        return self._w_port.write(command, self.TIMEOUT_WRITE) == len(command)
 
-    def recv(self, cap = 1024) -> bytes:
-        resp = bytes()
-        while True:
-            try:
-                buff = self._r_port.read(cap, self.TIMEOUT_READ)
-                if buff is None or buff == b'':
-                    break
-                resp += buff
-            except usb.USBError as e:
-                break
-        return resp
+    def recv(self, cap=1024):
+        # INFO packets are progress; only OKAY/FAIL/DATA terminate a reply.
+        # Converting PyUSB arrays explicitly avoids bytes/array concatenation.
+        for _ in range(1024):
+            packet = bytes(self._r_port.read(cap, self.TIMEOUT_READ))
+            if packet.startswith(b'INFO'):
+                print(packet[4:].decode(errors='replace'))
+            elif packet[:4] in (b'OKAY', b'FAIL', b'DATA'):
+                return packet
+            else:
+                raise RuntimeError('Invalid or missing fastboot response')
+        raise RuntimeError('Too many fastboot progress packets')
 
     def command(self):
         while True:
@@ -114,14 +115,8 @@ class Fastboot:
                 o = '🚫' if not d or r.startswith('FAIL') else '📄'
                 print(f"{o} {r[:4]} {r[4:]}", end='\n\n')
 
-    def reboot(self, mode = ''):
-        cmd = b'reboot'
-        if mode: cmd += b'-' + mode.encode()
-        else   : mode = 'device'
-        print(f"♻️  Reboot {mode}... ")
-        done = self.send(cmd)
-        resp = self.recv().decode() if done else 'FAIL'
-        print(f' ↪︎ {resp}', end='\n\n')
+    def reboot(self, mode=''):
+        self._execute(('reboot' + ('-' + mode if mode else '')).encode())
 
     @staticmethod
     def match_usb_device(d):
@@ -138,26 +133,19 @@ class Fastboot:
 
     @staticmethod
     def select_usb_device():
-        print("⏱️  Waiting for fastboot device...", end=S_SEP)
-        device = usb.core.find(custom_match = Fastboot.match_usb_device)
-        if device is None:
-            print("| 📵  No any device found (check you phone cable)"+ E_SEP)
-        elif not isinstance(device, usb.core.Device):
-            promt = []
-            for n,dev in enumerate(device):
-                vendor  = usb.util.get_string(dev, 1)
-                product = usb.util.get_string(dev, 2)
-                mtp     = usb.util.get_string(dev, 5)
-                serial  = usb.util.get_string(dev, dev.iSerialNumber)
-                promt.append(f"| {n}: {'📱' if mtp == 'MTP' else '🖥️'} {vendor} {product} \033[1m{serial}\033[0m")
-            idx = int(input(
-                f"{'\n'.join(promt) + E_SEP}| ** Enter you device number: "))
-            if idx >= len(device):
-                print(f"| ‼️  Wrong device index ({idx} > {len(device) - 1}){E_SEP}")
-                return None
-            else:
-                return device[idx]
-        return device
+        devices = list(usb.core.find(find_all=True, custom_match=Fastboot.match_usb_device))
+        if not devices:
+            print('No fastboot device found')
+            return None
+        if len(devices) == 1:
+            return devices[0]
+        for index, device in enumerate(devices):
+            print('%d: %s' % (index, device.serial_number or 'Unknown serial'))
+        try:
+            index = int(input('Device number: '))
+        except ValueError:
+            return None
+        return devices[index] if 0 <= index < len(devices) else None
 
     def usrlock(self, key: str = '', fblock: str = ''):
 
