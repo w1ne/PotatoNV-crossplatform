@@ -74,3 +74,7 @@ Validation
 Tests use synthetic UPDATE.APP files, mocked USB/serial transports, and checksums
 of the bundled images. They do not open physical devices or prove hardware
 compatibility. The device table was inherited from the fork, not revalidated.
+
+A proposed GitHub Actions matrix is in docs/ci-tests.yml. It is not active: the
+publishing OAuth credential lacks workflow scope. A maintainer can enable it by
+moving it to .github/workflows/tests.yml with a workflow-capable credential.
