@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Wrapper originally made by OpenA; resolve modules independently of caller cwd.
+root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+export PYTHONPATH="$root${PYTHONPATH:+:$PYTHONPATH}"
+case "${1:-}" in
+    bootloader | fastboot | extract)
+        command="$1"
+        shift
+        exec python3 -m usrlock -C "$command" "$@"
+        ;;
+    help) exec python3 -m usrlock --help ;;
+    *) exec python3 -m usrlock "$@" ;;
+esac

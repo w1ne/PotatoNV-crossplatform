@@ -1,23 +1,16 @@
-# Reworked from https://github.com/96boards-hikey/tools-images-hikey970/blob/hikey970_v1.0/hisi-idt.py
-
+# Reworked from:
+# * https://github.com/96boards-hikey/tools-images-hikey970/blob/hikey970_v1.0/hisi-idt.py
+# 
 # Copyright 2019 Penn Mackintosh
 # Copyright 2020 Andrey Smirnoff
 #
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+# Modyfied by OpenA @ 2026
 #
-# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-import binascii
-import itertools
-import serial
+import serial, os, hashlib, time, binascii
 import serial.tools.list_ports
-import sys
-import os
-import time
-from . import ui
-from time import sleep
+
+S_SEP = f"\n:{'*' * 32}\n"
+E_SEP = f"\n;{'-' * 32}\n"
 
 def calc_crc(data, crc=0):
     for char in data:
@@ -42,97 +35,128 @@ class ImageFlasher:
         self.tailframe = bytes([0xED])
         self.ack = bytes([0xAA])
 
-    def send_frame(self, data):
-        crc = calc_crc(data)
+    def send_frame(self, data: bytes) -> bool:
+        crc = binascii.crc_hqx(data, 0)
         data += crc.to_bytes(2, byteorder="big", signed=False)
         try:
             self.serial.reset_output_buffer()
             self.serial.reset_input_buffer()
-            self.serial.write(data)
+            if self.serial.write(data) != len(data):
+                return False
             ack = self.serial.read(1)
-            if ack and ack != self.ack:
-                ui.error(f"Invalid ACK from device! Read: {hex(ack)}, excepted: {hex(self.ack[0])}", critical=True)
+            if ack != self.ack:
+                print(f"Invalid or missing ACK: {ack!r}; expected {self.ack!r}")
+                return False
         except Exception as e:
-            ui.error(str(e), critical=True)
+            print(f"⛔ {e}", end='\n\n')
+            return False
+        return True
 
-    def send_head_frame(self, length, address):
-        self.serial.timeout = 0.09
-        ui.debug("Sending header frame")
+    def send_head_frame(self, length: int, address: int) -> bool:
+        if self.serial:
+            self.serial.timeout = 0.09
+        print("; 🗳️  Sending header frame...", end=E_SEP)
         data = self.headframe
         data += length.to_bytes(4, byteorder="big", signed=False)
         data += address.to_bytes(4, byteorder="big", signed=False)
-        self.send_frame(data)
+        return self.send_frame(data)
 
-    def send_data_frame(self, n, data):
-        self.serial.timeout = 0.45
-        ui.debug("Sending data frame")
+    def send_data_frame(self, n: int, data: bytes, n_frames: int) -> bool:
+        if self.serial:
+            self.serial.timeout = 0.45
+        print(f"; ... [{n}/{n_frames}]{' '*12}", end='\r')
         head = bytearray(self.dataframe)
         head.append(n & 0xFF)
         head.append((~ n) & 0xFF)
-        self.send_frame(bytes(head) + data)
+        return self.send_frame(bytes(head) + data)
 
-    def send_tail_frame(self, n):
+    def send_tail_frame(self, n: int) -> bool:
         if self.serial:
             self.serial.timeout = 0.01
-        ui.debug("Sending tail frame")
+        print(E_SEP +"; 🍤 Sending tail frame...", end=E_SEP)
         data = bytearray(self.tailframe)
         data.append(n & 0xFF)
         data.append((~ n) & 0xFF)
-        self.send_frame(bytes(data))
+        return self.send_frame(bytes(data))
 
-    def send_data(self, data, length, address):
+    def send_data(self, data, length: int, address: int) -> bool:
         if isinstance(data, bytes):
             length = len(data)
-        n_frames = length // MAX_DATA_LEN + (1 if length % MAX_DATA_LEN > 0 else 0)
-        self.send_head_frame(length, address)
-        n = 0
-        while length > MAX_DATA_LEN:
-            if isinstance(data, bytes):
-                f = data[n * MAX_DATA_LEN:(n + 1) * MAX_DATA_LEN]
-            else:
-                f = data.read(MAX_DATA_LEN)
-            self.send_data_frame(n + 1, f)
-            n += 1
-            length -= MAX_DATA_LEN
-            ui.progress(value=n, max_value=n_frames)
-        if length:
-            if isinstance(data, bytes):
-                f = data[n * MAX_DATA_LEN:]
-            else:
-                f = data.read()
-            self.send_data_frame(n + 1, f)
-            n += 1
-        ui.progress(value=100)
-        self.send_tail_frame(n + 1)
+        n_frames = (length + MAX_DATA_LEN - 1) // MAX_DATA_LEN
+        if not self.send_head_frame(length, address):
+            return False
+        for n in range(n_frames):
+            count = min(length - n * MAX_DATA_LEN, MAX_DATA_LEN)
+            chunk = data[n * MAX_DATA_LEN:n * MAX_DATA_LEN + count] if isinstance(data, bytes) else data.read(count)
+            if len(chunk) != count or not self.send_data_frame(n + 1, chunk, n_frames):
+                return False
+        if not self.send_tail_frame(n_frames + 1):
+            return False
         time.sleep(0.5)
+        return True
 
-    def download_from_disk(self, fil, address):
-        if fil == "-":
-            f = sys.stdin
-        else:
-            f = open(fil, "rb")
-        self.send_data(f, os.stat(fil).st_size, address)
+    @staticmethod
+    def boot_flash(el, img_paths):
+        if not ImageFlasher.test_hash(el, img_paths):
+            raise ValueError("Bootloader checksum mismatch")
+        flasher = ImageFlasher()
+        try:
+            if not flasher.connect_serial():
+                return False
+            for item, image in zip(el['imgs'], img_paths):
+                with open(image, 'rb') as source:
+                    if not flasher.send_data(source, os.fstat(source.fileno()).st_size, item['addr']):
+                        return False
+            print("Bootloader uploaded.")
+            return True
+        finally:
+            if flasher.serial is not None:
+                flasher.serial.close()
 
-    def connect_serial(self, device=None):
-        ui.info("Waiting for device in IDT mode")
+    @staticmethod
+    def test_hash(el: dict, img_paths: list[str]):
+        if len(el['imgs']) != len(img_paths):
+            return False
+        idx = mis = 0
+        print("%s; 🛅 Testing images \033[1m%s\033[0m"% (S_SEP, el['path']), end=S_SEP)
+        for p_img in img_paths:
+            sha1 = hashlib.sha1()
+            role = el['imgs'][idx]['role']
+            hash = el['imgs'][idx]['hash']
+            print('; ┌ %s.img ┐\n; └── \033[1;37;42m%s\033[0m'% (role, hash))
+            with open(p_img, 'rb') as f:
+                while chunk := f.read(4096):
+                    sha1.update(chunk)
+            hsum = sha1.hexdigest()
+            print(';   ╚ \033[1;37;4%dm%s\033[0m'% ((hsum == hash) + 1, hsum))
+            mis += hash != hsum
+            idx += 1
+        print("%s; 🛂 Passed %d/%d"% (E_SEP[1:], idx - mis, idx), end='\n\n')
+
+        return mis == 0
+
+    def connect_serial(self, device=None) -> bool:
+        print("🔍 Waiting for device in IDT mode")
         while not device:
             ports = serial.tools.list_ports.comports(include_links=False)
             for port in ports:
                 if port.vid == IDT_VID and port.pid == IDT_PID:
-                    ui.info(f"Autoselecting {port.hwid} aka {port.description} at {port.device}")
-                    if device:
-                        ui.error("Multiple devices detected in IDT mode", critical=True)
-                    else:
+                    if not device:
+                        print(f"📟 Autoselecting {port.hwid} aka {port.description} at {port.device}", end='\n\n')
                         device = port.device
-            
+                    else:
+                        print("⚠️ Multiple devices detected in IDT mode", end='\n\n')
+                        return False
             if not device:
-                sleep(1)
+                time.sleep(2)
 
         if not device:
-            ui.error("Need a device in IDT mode plugged in to this computer", critical=True)
+            print(f"📵 Need a device in IDT mode plugged in to this computer", end='\n\n')
+            return False
         self.serial = serial.Serial(dsrdtr=True, rtscts=True, port=device.replace("COM", r"\\.\COM"), baudrate=IDT_BAUDRATE, timeout=1)
+        return True
 
-    def close(self):
+    def __del__(self):
         try:
             self.serial.close()
         except:
